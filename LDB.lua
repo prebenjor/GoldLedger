@@ -5,6 +5,10 @@ if not addon then
   _G.GoldLedger = addon
 end
 
+local LibStub = _G.LibStub
+local ldb = LibStub and LibStub("LibDataBroker-1.1", true)
+local dataObj
+
 
 function addon:InitLDB()
     if not ldb then return end
@@ -39,6 +43,6 @@ end
 function addon:UpdateLDB()
     if not dataObj then return end
     local t = addon:GetTotals()
-    local g = floor((t.gold or 0) / 10000)
+    local g = math.floor((t.gold or 0) / 10000)
     dataObj.text = string.format("%dg", g)
 end
