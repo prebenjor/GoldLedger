@@ -322,15 +322,29 @@ local function RefreshHistory()
 
     local daily, items = {}, {}
     for _, h in ipairs(hist) do
-        local day = date("%Y-%m-%d", h.t)
-        daily[day] = daily[day] or { gold = h.gold, first = h, last = h }
-        daily[day].first = h
-        daily[day].last = daily[day].last or h
+        if h.t then
+            local day = date("%Y-%m-%d", h.t)
+            local bucket = daily[day]
+            if not bucket then
+                bucket = { first = h, last = h }
+                daily[day] = bucket
+            end
+
+            if not bucket.first or (h.t < (bucket.first.t or h.t)) then
+                bucket.first = h
+            end
+            if not bucket.last or (h.t > (bucket.last.t or h.t)) then
+                bucket.last = h
+            end
+            bucket.gold = bucket.last.gold or h.gold
+        end
     end
 
     for d, v in pairs(daily) do
-        local diff = (v.first.gold or 0) - (v.last.gold or 0)
-        items[#items + 1] = { day = d, gold = v.gold, diff = diff }
+        local firstGold = v.first and v.first.gold or 0
+        local lastGold = v.last and v.last.gold or firstGold
+        local diff = lastGold - firstGold
+        items[#items + 1] = { day = d, gold = lastGold, diff = diff }
     end
     table.sort(items, function(a, b) return a.day > b.day end)
 
@@ -341,8 +355,14 @@ local function RefreshHistory()
         local r = historyRows[i]
         r:Show()
         local col = it.diff > 0 and "|cff00ff00" or it.diff < 0 and "|cffff5555" or "|cffffffff"
-        r.txt:SetText(string.format("%s  %s  %s%+dg|r",
-            it.day, addon:FormatMoney(it.gold), col, math.floor(it.diff / 10000)))
+        local diffText = addon:FormatMoney(math.abs(it.diff))
+        if it.diff >= 0 then
+            diffText = "+" .. diffText
+        else
+            diffText = "-" .. diffText
+        end
+        r.txt:SetText(string.format("%s  %s  %s%s|r",
+            it.day, addon:FormatMoney(it.gold), col, diffText))
     end
 end
 
