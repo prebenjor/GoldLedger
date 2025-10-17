@@ -13,12 +13,22 @@ local function GetCharKey()
     return realm .. "-" .. name
 end
 
-function addon:FormatMoney(m)
-    if not m then return "0g" end
-    local g = math.floor(m / 10000)
-    local s = math.floor((m / 100) % 100)
-    local c = m % 100
-    return string.format("%dg %ds %dc", g, s, c)
+function addon:FormatMoney(amount)
+    if not amount then return "0g" end
+
+    local negative = amount < 0
+    local copper = math.floor(math.abs(amount) + 0.5)
+
+    local gold = math.floor(copper / 10000)
+    local silver = math.floor((copper % 10000) / 100)
+    local copperRemainder = copper % 100
+
+    local formatted = string.format("%dg %ds %dc", gold, silver, copperRemainder)
+    if negative and copper > 0 then
+        formatted = "-" .. formatted
+    end
+
+    return formatted
 end
 
 ------------------------------------------------------------

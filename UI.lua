@@ -1,18 +1,53 @@
--- GoldLedger: Analytics UI (v1.6 – with Fixed Minimap Button)
+-- GoldLedger: Analytics UI (v1.7 – Library-driven components)
 ------------------------------------------------------------
 if not _G.GoldLedger then _G.GoldLedger = {} end
 local addon = _G.GoldLedger
 
-local frame, scroll, listParent, totalRow, minimapButton
+local LibStub = _G.LibStub
+local Widgets = LibStub and LibStub("GoldLedgerWidgets-1.0")
+if not Widgets then
+    error("GoldLedgerWidgets-1.0 is required by GoldLedger")
+end
+
+local max, abs = math.max, math.abs
+
+local frame, scroll, listParent, minimapButton
 local summaryRows, historyRows = {}, {}
 local currentTab = GoldLedgerDB and GoldLedgerDB.settings and GoldLedgerDB.settings.lastTab or "summary"
 
 ------------------------------------------------------------
 -- Helpers
 ------------------------------------------------------------
-local function fmtTime(ts)
-    local d = date("*t", ts)
-    return string.format("%04d-%02d-%02d %02d:%02d", d.year, d.month, d.day, d.hour, d.min)
+local function CleanName(key)
+    return (key or ""):gsub(" - Warcraft Reborn", "")
+end
+
+local function FormatSignedMoney(amount)
+    local value = addon:FormatMoney(abs(amount or 0))
+    if not amount or amount == 0 then
+        return value
+    elseif amount > 0 then
+        return "+" .. value
+    else
+        return "-" .. value
+    end
+end
+
+local function UpdateListHeight(rows)
+    if not listParent then return end
+    local shown, rowHeight = 0, 20
+    for _, row in ipairs(rows) do
+        if row:IsShown() then
+            shown = shown + 1
+            rowHeight = row:GetHeight() or rowHeight
+        end
+    end
+    local spacing = 4
+    local totalHeight = shown > 0 and (shown * rowHeight + (shown - 1) * spacing) or rowHeight
+    listParent:SetHeight(totalHeight)
+    if scroll and scroll.UpdateScrollChildRect then
+        scroll:UpdateScrollChildRect()
+    end
 end
 
 local function calcGPH(cd)
@@ -28,201 +63,187 @@ local function calcGPH(cd)
 end
 
 ------------------------------------------------------------
--- Frame Creation
+-- UI Construction
 ------------------------------------------------------------
 local function CreateMainFrame()
     if frame then return end
 
-    frame = CreateFrame("Frame", "GoldLedgerUI_Frame", UIParent)
-    frame:SetSize(460, 420)
-    frame:SetPoint("CENTER")
-    frame:SetResizable(true)
-    frame:SetMinResize(320, 240)
-    frame:SetBackdrop({
-        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 32,
-        insets = { left = 8, right = 8, top = 8, bottom = 8 }
+    frame = Widgets:CreateDialog("GoldLedgerUI_Frame", UIParent, {
+        title = "GoldLedger",
+        width = 500,
+        height = 460,
+        minWidth = 360,
+        minHeight = 260,
     })
-    frame:SetMovable(true)
-    frame:EnableMouse(true)
-    frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", frame.StartMoving)
-    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-    frame:Hide()
 
-    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-    title:SetPoint("TOP", 0, -12)
-    title:SetText("GoldLedger")
+    local function selectTab(tab)
+        currentTab = tab
+        _G.GoldLedgerUI_Refresh()
+    end
 
-    local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", -6, -6)
-
-    -- Tabs
-    frame.summaryTab = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    frame.summaryTab:SetSize(100, 24)
-    frame.summaryTab:SetPoint("TOPLEFT", 20, -36)
-    frame.summaryTab:SetText("Summary")
-
-    frame.historyTab = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    frame.historyTab:SetSize(100, 24)
-    frame.historyTab:SetPoint("LEFT", frame.summaryTab, "RIGHT", 6, 0)
-    frame.historyTab:SetText("History")
-
+    frame.summaryTab = Widgets:CreateTabButton(frame, "Summary", 120)
+    frame.summaryTab:SetPoint("TOPLEFT", 18, -38)
     frame.summaryTab:SetScript("OnClick", function()
-        currentTab = "summary"
-        _G.GoldLedgerUI_Refresh()
+        selectTab("summary")
     end)
+
+    frame.historyTab = Widgets:CreateTabButton(frame, "History", 120)
+    frame.historyTab:SetPoint("LEFT", frame.summaryTab, "RIGHT", 8, 0)
     frame.historyTab:SetScript("OnClick", function()
-        currentTab = "history"
-        _G.GoldLedgerUI_Refresh()
+        selectTab("history")
     end)
 
-    frame.totalText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    frame.totalText:SetPoint("TOPLEFT", 16, -70)
-    frame.sessionText = frame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
-    frame.sessionText:SetPoint("TOPLEFT", 16, -90)
+    frame.infoCard = Widgets:CreateCard(frame, { backdropColor = { 0, 0, 0, 0.85 } })
+    frame.infoCard:SetPoint("TOPLEFT", 16, -72)
+    frame.infoCard:SetPoint("TOPRIGHT", -16, -72)
+    frame.infoCard:SetHeight(96)
 
-    scroll = CreateFrame("ScrollFrame", "GoldLedgerScroll", frame, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", 16, -120)
-    scroll:SetPoint("BOTTOMRIGHT", -36, 36)
+    frame.totalText = frame.infoCard:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    frame.totalText:SetPoint("TOPLEFT", 14, -12)
+    frame.totalText:SetPoint("TOPRIGHT", -14, -12)
+    frame.totalText:SetJustifyH("LEFT")
 
-    listParent = CreateFrame("Frame", nil, scroll)
-    listParent:SetSize(1, 1)
-    scroll:SetScrollChild(listParent)
+    frame.sessionText = frame.infoCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    frame.sessionText:SetPoint("TOPLEFT", frame.totalText, "BOTTOMLEFT", 0, -8)
+    frame.sessionText:SetPoint("TOPRIGHT", frame.totalText, "BOTTOMRIGHT", 0, -8)
+    frame.sessionText:SetJustifyH("LEFT")
 
-    -- Headers
-    local headers = {
-        { text = "Character", width = 260 },
-        { text = "Gold (Earned / Spent)", width = 160 },
-    }
-    local x = 16
-    for _, h in ipairs(headers) do
-        local t = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        t:SetPoint("TOPLEFT", x, -105)
-        t:SetWidth(h.width)
-        t:SetText(h.text)
-        x = x + h.width + 20
-    end
+    frame.headerAnchor = CreateFrame("Frame", nil, frame)
+    frame.headerAnchor:SetPoint("TOPLEFT", frame.infoCard, "BOTTOMLEFT", 0, -10)
+    frame.headerAnchor:SetPoint("TOPRIGHT", frame.infoCard, "BOTTOMRIGHT", 0, -10)
+    frame.headerAnchor:SetHeight(18)
 
-    -- Resize handle
-    local resize = CreateFrame("Frame", nil, frame)
-    resize:SetPoint("BOTTOMRIGHT", -4, 4)
-    resize:SetSize(16, 16)
-    resize.texture = resize:CreateTexture(nil, "OVERLAY")
-    resize.texture:SetAllPoints()
-    resize.texture:SetTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
-    resize:EnableMouse(true)
-    resize:SetScript("OnMouseDown", function(_, btn)
-        if btn == "LeftButton" then frame:StartSizing("BOTTOMRIGHT") end
-    end)
-    resize:SetScript("OnMouseUp", function() frame:StopMovingOrSizing() end)
-end
+    frame.headers = {}
+    frame.headers.summary = Widgets:CreateRow(frame, 420, 18, {
+        interactive = false,
+        padding = 14,
+        spacing = 40,
+        backgroundColor = { 0.08, 0.08, 0.08, 0.75 },
+    })
+    frame.headers.summary:SetPoint("TOPLEFT", frame.headerAnchor, "TOPLEFT")
+    frame.headers.summary:SetPoint("TOPRIGHT", frame.headerAnchor, "TOPRIGHT")
+    frame.headers.summary:AddCell(260, "GameFontHighlightSmall"):SetText("Character")
+    frame.headers.summary:AddCell(160, "GameFontHighlightSmall", "RIGHT"):SetText("Balance / Flow")
 
-------------------------------------------------------------
--- Minimap Button (fixed)
-------------------------------------------------------------
-local function CreateMinimapButton()
-    if minimapButton then return end
+    frame.headers.history = Widgets:CreateRow(frame, 420, 18, {
+        interactive = false,
+        padding = 14,
+        spacing = 40,
+        backgroundColor = { 0.08, 0.08, 0.08, 0.75 },
+    })
+    frame.headers.history:SetPoint("TOPLEFT", frame.headerAnchor, "TOPLEFT")
+    frame.headers.history:SetPoint("TOPRIGHT", frame.headerAnchor, "TOPRIGHT")
+    frame.headers.history:AddCell(150, "GameFontHighlightSmall"):SetText("Day")
+    frame.headers.history:AddCell(140, "GameFontHighlightSmall"):SetText("Balance")
+    frame.headers.history:AddCell(120, "GameFontHighlightSmall", "RIGHT"):SetText("Net Change")
+    frame.headers.history:Hide()
 
-    GoldLedgerDB.settings = GoldLedgerDB.settings or {}
-    if type(GoldLedgerDB.settings.minimapPos) ~= "number" then
-        GoldLedgerDB.settings.minimapPos = 45
-    end
+    scroll, listParent = Widgets:CreateScrollList(frame, "GoldLedgerScroll")
+    scroll:SetPoint("TOPLEFT", frame.headerAnchor, "BOTTOMLEFT", 0, -8)
+    scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -40, 32)
 
-    minimapButton = CreateFrame("Button", "GoldLedger_MinimapButton", Minimap)
-    minimapButton:SetFrameStrata("MEDIUM")
-    minimapButton:SetFrameLevel(Minimap:GetFrameLevel() + 10)
-    minimapButton:SetSize(32, 32)
-    minimapButton:SetMovable(true)
-    minimapButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+    listParent:SetPoint("TOPLEFT", 0, 0)
+    listParent:SetPoint("TOPRIGHT", 0, 0)
 
-    local icon = minimapButton:CreateTexture(nil, "BACKGROUND")
-    icon:SetTexture("Interface\\Icons\\INV_Misc_Coin_01") -- visible in 3.3.5
-    icon:SetSize(20, 20)
-    icon:SetPoint("CENTER")
-
-    minimapButton:SetScript("OnClick", function(_, button)
-        if button == "LeftButton" then
-            _G.GoldLedgerUI_Toggle()
-        elseif button == "RightButton" then
-            GoldLedgerDB.settings.minimapHidden = not GoldLedgerDB.settings.minimapHidden
-            if GoldLedgerDB.settings.minimapHidden then minimapButton:Hide() else minimapButton:Show() end
-        end
-    end)
-
-    minimapButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:AddLine("|cffFFD700GoldLedger|r")
-        GameTooltip:AddLine("Left-click: Toggle UI")
-        GameTooltip:AddLine("Right-click: Hide/Show icon")
-        GameTooltip:Show()
-    end)
-    minimapButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-    minimapButton:SetScript("OnDragStart", function(self)
-        self:SetScript("OnUpdate", function()
-            local mx, my = Minimap:GetCenter()
-            local px, py = GetCursorPosition()
-            local scale = UIParent:GetEffectiveScale()
-            local pos = math.deg(math.atan2(py / scale - my, px / scale - mx))
-            GoldLedgerDB.settings.minimapPos = pos
-
-            local rad = math.rad(pos)
-            local radius = (Minimap:GetWidth() / 2) + 6
-            self:SetPoint("CENTER", Minimap, "CENTER", radius * math.cos(rad), radius * math.sin(rad))
-        end)
-    end)
-
-    minimapButton:SetScript("OnDragStop", function(self)
-        self:SetScript("OnUpdate", nil)
-    end)
-
-    minimapButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    minimapButton:RegisterForDrag("LeftButton")
-
-    local pos = tonumber(GoldLedgerDB.settings.minimapPos) or 45
-    pos = math.rad(pos)
-    local radius = (Minimap:GetWidth() / 2) + 6
-    minimapButton:SetPoint("CENTER", Minimap, "CENTER", radius * math.cos(pos), radius * math.sin(pos))
-
-    if GoldLedgerDB.settings.minimapHidden then minimapButton:Hide() end
+    frame.summaryTab:SetSelected(currentTab == "summary")
+    frame.historyTab:SetSelected(currentTab == "history")
+    frame.headers.summary:SetShown(currentTab == "summary")
+    frame.headers.history:SetShown(currentTab == "history")
 end
 
 ------------------------------------------------------------
 -- Row Factories
 ------------------------------------------------------------
-local function CreateSummaryRow(i)
-    local row = CreateFrame("Frame", nil, listParent)
-    row:SetSize(420, 20)
-    if i == 1 then
-        row:SetPoint("TOPLEFT", 0, 0)
+local function AcquireSummaryRow(index)
+    if summaryRows[index] then return summaryRows[index] end
+
+    local row = Widgets:CreateRow(listParent, listParent:GetWidth(), 24, { padding = 14 })
+    row:SetHeight(24)
+    if index == 1 then
+        row:SetPoint("TOPLEFT", listParent, "TOPLEFT", 0, 0)
+        row:SetPoint("TOPRIGHT", listParent, "TOPRIGHT", 0, 0)
     else
-        row:SetPoint("TOPLEFT", summaryRows[i - 1], "BOTTOMLEFT", 0, -4)
+        row:SetPoint("TOPLEFT", summaryRows[index - 1], "BOTTOMLEFT", 0, -4)
+        row:SetPoint("TOPRIGHT", summaryRows[index - 1], "BOTTOMRIGHT", 0, -4)
     end
 
-    row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    row.name:SetPoint("LEFT", 4, 0)
-    row.name:SetWidth(260)
+    row.name = row:AddCell(260, "GameFontHighlight")
+    row.value = row:AddCell(160, "GameFontHighlightSmall", "RIGHT")
 
-    row.value = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    row.value:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
-    row.value:SetWidth(160)
+    Widgets:AttachTooltip(row, function(self)
+        local data = self.tooltipData
+        if not data then return end
+        local net = (data.earned or 0) - (data.spent or 0)
+        local netColor = net > 0 and "|cff00ff00" or net < 0 and "|cffff5555" or "|cffffffff"
+        local netText = addon:FormatMoney(abs(net))
+        if net > 0 then
+            netText = "+" .. netText
+        elseif net < 0 then
+            netText = "-" .. netText
+        end
 
+        local lines = {
+            ("|cff999999Balance|r %s"):format(addon:FormatMoney(data.gold or 0)),
+            ("|cff00ff00Earned|r %s"):format(addon:FormatMoney(data.earned or 0)),
+            ("|cffff5555Spent|r %s"):format(addon:FormatMoney(data.spent or 0)),
+        }
+
+        if data.sessionNet and data.sessionNet ~= 0 then
+            local sessionColor = data.sessionNet > 0 and "|cff00ff00" or "|cffff5555"
+            local sessionText = addon:FormatMoney(abs(data.sessionNet))
+            sessionText = (data.sessionNet > 0 and "+" or "-") .. sessionText
+            table.insert(lines, ("|cffFFD700Session Net|r %s%s|r"):format(sessionColor, sessionText))
+        end
+
+        table.insert(lines, ("|cffFFFFFFLifetime Net|r %s%s|r"):format(netColor, netText))
+
+        return {
+            title = string.format("|cffFFD700%s|r", data.displayName or data.key or ""),
+            lines = lines,
+        }
+    end)
+
+    summaryRows[index] = row
     return row
 end
 
-local function CreateHistoryRow(i)
-    local line = CreateFrame("Frame", nil, listParent)
-    line:SetSize(400, 18)
-    if i == 1 then
-        line:SetPoint("TOPLEFT", 0, 0)
+local function AcquireHistoryRow(index)
+    if historyRows[index] then return historyRows[index] end
+
+    local row = Widgets:CreateRow(listParent, listParent:GetWidth(), 22, { padding = 14 })
+    row:SetHeight(22)
+    if index == 1 then
+        row:SetPoint("TOPLEFT", listParent, "TOPLEFT", 0, 0)
+        row:SetPoint("TOPRIGHT", listParent, "TOPRIGHT", 0, 0)
     else
-        line:SetPoint("TOPLEFT", historyRows[i - 1], "BOTTOMLEFT", 0, -4)
+        row:SetPoint("TOPLEFT", historyRows[index - 1], "BOTTOMLEFT", 0, -4)
+        row:SetPoint("TOPRIGHT", historyRows[index - 1], "BOTTOMRIGHT", 0, -4)
     end
-    line.txt = line:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    line.txt:SetPoint("LEFT", 4, 0)
-    return line
+
+    row.day = row:AddCell(150, "GameFontHighlightSmall")
+    row.balance = row:AddCell(140, "GameFontHighlightSmall")
+    row.change = row:AddCell(120, "GameFontHighlightSmall", "RIGHT")
+
+    Widgets:AttachTooltip(row, function(self)
+        local data = self.tooltipData
+        if not data then return end
+        local diff = data.diff or 0
+        local diffColor = diff > 0 and "|cff00ff00" or diff < 0 and "|cffff5555" or "|cffffffff"
+        local prefix = diff > 0 and "+" or diff < 0 and "-" or ""
+        local netText = addon:FormatMoney(abs(diff))
+
+        return {
+            title = string.format("|cffFFD700%s|r", data.day or ""),
+            lines = {
+                ("Open: %s"):format(addon:FormatMoney(data.open or 0)),
+                ("Close: %s"):format(addon:FormatMoney(data.close or data.gold or 0)),
+                ("Net: %s%s|r"):format(diffColor, prefix .. netText),
+            },
+        }
+    end)
+
+    historyRows[index] = row
+    return row
 end
 
 ------------------------------------------------------------
@@ -231,119 +252,155 @@ end
 local function RefreshSummary()
     local total = addon:GetTotals()
     local playerKey = addon:GetCharKey()
-    local playerData = GoldLedgerDB.characters[playerKey]
+    local playerData = addon:GetCharData(playerKey)
     local session = playerData and playerData.session or { earned = 0, spent = 0, start = time() }
 
-    -- clear older lines
-    frame.totalText:SetText("")
-    frame.sessionText:SetText("")
+    local totalLines = {
+        ("|cffFFD700Total Gold:|r %s"):format(addon:FormatMoney(total.gold)),
+        ("|cff00ff00Earned:|r %s   |cffff5555Spent:|r %s"):format(addon:FormatMoney(total.earned), addon:FormatMoney(total.spent)),
+        ("|cff999999Tracked Characters:|r %d"):format(total.chars or 0),
+    }
+    frame.totalText:SetText(table.concat(totalLines, "\n"))
 
-    -- build nice block text
-    local totalBlock = string.format(
-        "|cffffff00Total Gold:|r %s  |cff999999(%d chars)|r\n" ..
-        "|cff00ff00Earned:|r %s   |cffff5555Spent:|r %s",
-        addon:FormatMoney(total.gold), total.chars,
-        addon:FormatMoney(total.earned), addon:FormatMoney(total.spent)
-    )
+    local sessionNet = (session.earned or 0) - (session.spent or 0)
+    local gphSession, gphLifetime = calcGPH(playerData)
+    frame.sessionText:SetText(string.format(
+        "|cffFFD700%s|r\nSession Net: %s   |cffFFD700GPH:|r %s (session) / %s (lifetime)",
+        CleanName(playerKey),
+        FormatSignedMoney(sessionNet),
+        gphSession,
+        gphLifetime
+    ))
 
-    local gphS, gphL = calcGPH(playerData)
-    local sessionBlock = string.format(
-        "|cffffff00Session – %s|r\n" ..
-        "Net: %s    |cffFFD700GPH:|r %s (S)  %s (L)",
-        playerKey:gsub(" - Warcraft Reborn", ""),
-        addon:FormatMoney((session.earned or 0) - (session.spent or 0)),
-        gphS, gphL
-    )
-
-    frame.totalText:SetText(totalBlock)
-    frame.sessionText:SetText(sessionBlock)
-
-    -- position cleanly
-    frame.totalText:ClearAllPoints()
-    frame.totalText:SetPoint("TOPLEFT", 16, -65)
-    frame.sessionText:ClearAllPoints()
-    frame.sessionText:SetPoint("TOPLEFT", 16, -110)
-
-    -- create row list
     local items = {}
-    for k, d in addon:IterChars() do
-        items[#items + 1] = { key = k, gold = d.gold, earned = d.earned, spent = d.spent }
+    for key, data in addon:IterChars() do
+        local entry = {
+            key = key,
+            displayName = CleanName(key),
+            gold = data.gold or 0,
+            earned = data.earned or 0,
+            spent = data.spent or 0,
+            sessionEarned = data.session and data.session.earned or 0,
+            sessionSpent = data.session and data.session.spent or 0,
+        }
+        entry.sessionNet = entry.sessionEarned - entry.sessionSpent
+        table.insert(items, entry)
     end
-    table.sort(items, function(a, b) return a.gold > b.gold end)
+
+    table.sort(items, function(a, b)
+        if a.gold == b.gold then
+            return a.displayName < b.displayName
+        end
+        return a.gold > b.gold
+    end)
 
     for i = #summaryRows + 1, #items do
-        local row = CreateFrame("Frame", nil, listParent)
-        row:SetSize(400, 18)
-        if i == 1 then
-            row:SetPoint("TOPLEFT", 0, 0)
-        else
-            row:SetPoint("TOPLEFT", summaryRows[i - 1], "BOTTOMLEFT", 0, -2)
-        end
-
-        row.bg = row:CreateTexture(nil, "BACKGROUND")
-        if i % 2 == 0 then
-            row.bg:SetColorTexture(0.08, 0.08, 0.08, 0.5)
-        else
-            row.bg:SetColorTexture(0, 0, 0, 0.3)
-        end
-        row.bg:SetAllPoints()
-
-        row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        row.name:SetPoint("LEFT", 4, 0)
-        row.name:SetWidth(220)
-
-        row.value = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        row.value:SetPoint("LEFT", row.name, "RIGHT", 6, 0)
-        row.value:SetWidth(160)
-
-        summaryRows[i] = row
+        AcquireSummaryRow(i)
+    end
+    for i = #items + 1, #summaryRows do
+        summaryRows[i]:Hide()
     end
 
-    for i = #items + 1, #summaryRows do summaryRows[i]:Hide() end
-
-    for i, it in ipairs(items) do
-        local r = summaryRows[i]
-        r:Show()
-        r.name:SetText("|cffFFD700" .. it.key:gsub(" - Warcraft Reborn", "") .. "|r")
-        r.value:SetText(string.format("%s  |cff00ff00(+%s)|r  |cffff5555(-%s)|r",
-            addon:FormatMoney(it.gold),
-            addon:FormatMoney(it.earned),
-            addon:FormatMoney(it.spent)))
+    for i, entry in ipairs(items) do
+        local row = summaryRows[i]
+        row:SetStripe(i % 2 == 0)
+        row:Show()
+        local nameText = entry.displayName
+        if entry.key == playerKey then
+            nameText = string.format("|cffFFD700%s|r", nameText)
+        end
+        row.name:SetText(nameText)
+        row.value:SetText(string.format("%s  |cff00ff00(+%s)|r  |cffff5555(-%s)|r",
+            addon:FormatMoney(entry.gold),
+            addon:FormatMoney(entry.earned),
+            addon:FormatMoney(entry.spent)
+        ))
+        row.tooltipData = entry
     end
+
+    UpdateListHeight(summaryRows)
 end
-
-
 
 local function RefreshHistory()
     local cd = addon:GetCharData()
     local hist = cd.history or {}
-    frame.totalText:SetText("|cffFFD700Character:|r " .. addon:GetCharKey())
-    frame.sessionText:SetText("Daily Summary View")
 
     local daily, items = {}, {}
     for _, h in ipairs(hist) do
-        local day = date("%Y-%m-%d", h.t)
-        daily[day] = daily[day] or { gold = h.gold, first = h, last = h }
-        daily[day].first = h
-        daily[day].last = daily[day].last or h
+        if h.t then
+            local day = date("%Y-%m-%d", h.t)
+            local bucket = daily[day]
+            if not bucket then
+                bucket = { first = h, last = h }
+                daily[day] = bucket
+            end
+            if not bucket.first or (h.t < (bucket.first.t or h.t)) then
+                bucket.first = h
+            end
+            if not bucket.last or (h.t > (bucket.last.t or h.t)) then
+                bucket.last = h
+            end
+        end
     end
 
-    for d, v in pairs(daily) do
-        local diff = (v.first.gold or 0) - (v.last.gold or 0)
-        items[#items + 1] = { day = d, gold = v.gold, diff = diff }
+    for d, info in pairs(daily) do
+        local firstGold = info.first and info.first.gold or 0
+        local lastGold = info.last and info.last.gold or firstGold
+        local diff = lastGold - firstGold
+        table.insert(items, {
+            day = d,
+            gold = lastGold,
+            open = firstGold,
+            close = lastGold,
+            diff = diff,
+        })
     end
-    table.sort(items, function(a, b) return a.day > b.day end)
 
-    for i = #historyRows + 1, #items do historyRows[i] = CreateHistoryRow(i) end
-    for i = #items + 1, #historyRows do historyRows[i]:Hide() end
+    table.sort(items, function(a, b)
+        return a.day > b.day
+    end)
 
-    for i, it in ipairs(items) do
-        local r = historyRows[i]
-        r:Show()
-        local col = it.diff > 0 and "|cff00ff00" or it.diff < 0 and "|cffff5555" or "|cffffffff"
-        r.txt:SetText(string.format("%s  %s  %s%+dg|r",
-            it.day, addon:FormatMoney(it.gold), col, math.floor(it.diff / 10000)))
+    local daysTracked = #items
+    local totalNet = 0
+    for _, info in ipairs(items) do
+        totalNet = totalNet + (info.diff or 0)
     end
+
+    local name = CleanName(addon:GetCharKey())
+    if daysTracked > 0 then
+        local latest = items[1]
+        frame.totalText:SetText(string.format("|cffFFD700%s|r — %s\n|cff999999Tracked days:|r %d",
+            name,
+            addon:FormatMoney(latest.gold or 0),
+            daysTracked
+        ))
+        frame.sessionText:SetText(string.format("|cff999999Net change across history:|r %s", FormatSignedMoney(totalNet)))
+    else
+        frame.totalText:SetText(string.format("|cffFFD700%s|r", name))
+        frame.sessionText:SetText("|cffaaaaaaNo gold history captured yet.|r")
+    end
+
+    for i = #historyRows + 1, #items do
+        AcquireHistoryRow(i)
+    end
+    for i = #items + 1, #historyRows do
+        historyRows[i]:Hide()
+    end
+
+    for i, info in ipairs(items) do
+        local row = historyRows[i]
+        row:SetStripe(i % 2 == 0)
+        row:Show()
+        local diffColor = info.diff > 0 and "|cff00ff00" or info.diff < 0 and "|cffff5555" or "|cffffffff"
+        local prefix = info.diff > 0 and "+" or info.diff < 0 and "-" or ""
+        local diffText = addon:FormatMoney(abs(info.diff or 0))
+        row.day:SetText(info.day)
+        row.balance:SetText(addon:FormatMoney(info.gold or 0))
+        row.change:SetText(string.format("%s%s|r", diffColor, prefix .. diffText))
+        row.tooltipData = info
+    end
+
+    UpdateListHeight(historyRows)
 end
 
 ------------------------------------------------------------
@@ -351,18 +408,83 @@ end
 ------------------------------------------------------------
 function _G.GoldLedgerUI_Refresh()
     if not frame or not frame:IsShown() then return end
-    for _, r in ipairs(summaryRows) do r:Hide() end
-    for _, r in ipairs(historyRows) do r:Hide() end
-    if currentTab == "summary" then RefreshSummary() else RefreshHistory() end
+
+    if frame.summaryTab and frame.summaryTab.SetSelected then
+        frame.summaryTab:SetSelected(currentTab == "summary")
+    end
+    if frame.historyTab and frame.historyTab.SetSelected then
+        frame.historyTab:SetSelected(currentTab == "history")
+    end
+    if frame.headers then
+        if frame.headers.summary then frame.headers.summary:SetShown(currentTab == "summary") end
+        if frame.headers.history then frame.headers.history:SetShown(currentTab == "history") end
+    end
+
+    for _, row in ipairs(summaryRows) do row:Hide() end
+    for _, row in ipairs(historyRows) do row:Hide() end
+
+    if currentTab == "summary" then
+        RefreshSummary()
+    else
+        RefreshHistory()
+    end
+
     if GoldLedgerDB and GoldLedgerDB.settings then
         GoldLedgerDB.settings.lastTab = currentTab
     end
 end
 
+local function CreateMinimapButton()
+    if minimapButton then return end
+
+    GoldLedgerDB.settings = GoldLedgerDB.settings or {}
+    local settings = GoldLedgerDB.settings
+    if type(settings.minimapPos) ~= "number" then
+        settings.minimapPos = 45
+    end
+
+    minimapButton = Widgets:CreateMinimapButton("GoldLedger_MinimapButton", {
+        icon = "Interface\\Icons\\INV_Misc_Coin_01",
+        getPosition = function()
+            return settings.minimapPos
+        end,
+        onPositionChanged = function(angle)
+            settings.minimapPos = angle
+        end,
+        isHidden = function()
+            return settings.minimapHidden
+        end,
+        tooltipProvider = function()
+            local hidden = settings.minimapHidden
+            return {
+                title = "|cffFFD700GoldLedger|r",
+                lines = {
+                    "Left-click: Toggle UI",
+                    hidden and "Right-click: Show icon" or "Right-click: Hide icon",
+                },
+            }
+        end,
+    })
+
+    minimapButton:SetScript("OnClick", function(_, button)
+        if button == "LeftButton" then
+            _G.GoldLedgerUI_Toggle()
+        elseif button == "RightButton" then
+            settings.minimapHidden = not settings.minimapHidden
+            minimapButton:RefreshVisibility()
+        end
+    end)
+
+    minimapButton:RefreshVisibility()
+    minimapButton:UpdatePosition()
+end
+
 function _G.GoldLedgerUI_Toggle()
     if not frame then CreateMainFrame() end
     if not minimapButton then CreateMinimapButton() end
-    if frame:IsShown() then frame:Hide() else
+    if frame:IsShown() then
+        frame:Hide()
+    else
         frame:Show()
         _G.GoldLedgerUI_Refresh()
     end
