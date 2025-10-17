@@ -1,0 +1,12 @@
+## Interface: 30300
+## Title: GoldLedger
+## Notes: Tracks gold across all characters with UI, history, and LDB support
+## Author: You
+## Version: 1.1.0
+## SavedVariables: GoldLedgerDB
+
+Core.lua
+Tracker.lua
+UI.lua
+History.lua
+LDB.lua
