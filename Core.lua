@@ -32,6 +32,22 @@ function addon:FormatMoney(amount)
 end
 
 ------------------------------------------------------------
+-- History helpers
+------------------------------------------------------------
+function addon:_PushHistorySnapshot(reason, newGold, diff)
+    local cd = self:GetCharData()
+    if not cd then return end
+
+    cd.history = cd.history or {}
+    cd.history[#cd.history + 1] = {
+        t = time(),
+        gold = newGold or cd.gold or GetMoney(),
+        reason = reason,
+        diff = diff,
+    }
+end
+
+------------------------------------------------------------
 -- DB Init
 ------------------------------------------------------------
 function addon:InitDB()
@@ -87,10 +103,16 @@ f:RegisterEvent("LOOT_OPENED")
 f:RegisterEvent("PLAYER_TRADE_MONEY")
 
 local function RecordEvent(reason)
+    if addon.OnMoneyChanged then
+        addon:OnMoneyChanged(reason)
+        return
+    end
+
     local cd = addon:GetCharData()
     if not cd then return end
     local nowGold = GetMoney()
     if not cd.lastGold then cd.lastGold = nowGold end
+    cd.session = cd.session or { start = time(), earned = 0, spent = 0, startGold = cd.lastGold }
     if nowGold ~= cd.lastGold then
         local diff = nowGold - cd.lastGold
         if diff > 0 then
@@ -103,7 +125,7 @@ local function RecordEvent(reason)
         cd.gold = nowGold
         cd.lastGold = nowGold
         cd.lastSeen = time()
-        cd.history[#cd.history + 1] = { t = time(), gold = nowGold, reason = reason }
+        addon:_PushHistorySnapshot(reason, nowGold, diff)
 
         if _G.GoldLedgerUI_Refresh then _G.GoldLedgerUI_Refresh() end
         if _G.GoldLedgerHistory_Refresh then _G.GoldLedgerHistory_Refresh() end
@@ -114,6 +136,8 @@ end
 f:SetScript("OnEvent", function(_, e)
     if e == "PLAYER_LOGIN" then
         addon:InitDB()
+        if addon.InitLDB then addon:InitLDB() end
+        RecordEvent("Login")
         DEFAULT_CHAT_FRAME:AddMessage("|cffFFD700[GoldLedger]|r Loaded. Use /gold ui")
     elseif e == "PLAYER_MONEY" then
         RecordEvent("Misc")
