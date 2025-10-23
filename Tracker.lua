@@ -8,23 +8,6 @@ local addon = _G.GoldLedger
 local prevMoney
 local prevChar
 
-local function getBaseline(cd, now)
-    local baseline = cd and cd.lastGold
-    local storedGold = cd and cd.gold
-
-    if storedGold ~= nil then
-        if baseline == nil or baseline ~= storedGold then
-            baseline = storedGold
-        end
-    end
-
-    if baseline == nil then
-        baseline = now
-    end
-
-    return baseline
-end
-
 function addon:OnMoneyChanged(reason)
     local cd = addon.GetCharData and addon:GetCharData()
     if not cd then return end
@@ -37,13 +20,10 @@ function addon:OnMoneyChanged(reason)
 
     local now = GetMoney()
     if not prevMoney then
-        prevMoney = getBaseline(cd, now)
+        prevMoney = cd.lastGold or now
     end
 
     cd.session = cd.session or { start = time(), earned = 0, spent = 0, startGold = prevMoney }
-    if not cd.session.startGold then
-        cd.session.startGold = prevMoney
-    end
 
     local diff = now - prevMoney
     if diff ~= 0 then
@@ -64,9 +44,7 @@ function addon:OnMoneyChanged(reason)
         if _G.GoldLedgerHistory_Refresh then _G.GoldLedgerHistory_Refresh() end
         if addon.UpdateLDB then addon:UpdateLDB() end
     else
-        cd.gold = now
         cd.lastGold = now
-        cd.lastSeen = time()
     end
 
     prevMoney = now
