@@ -104,6 +104,10 @@ local function RecordEvent(reason)
         cd.lastGold = nowGold
         cd.lastSeen = time()
         cd.history[#cd.history + 1] = { t = time(), gold = nowGold, reason = reason }
+
+        if _G.GoldLedgerUI_Refresh then _G.GoldLedgerUI_Refresh() end
+        if _G.GoldLedgerHistory_Refresh then _G.GoldLedgerHistory_Refresh() end
+        if addon.UpdateLDB then addon:UpdateLDB() end
     end
 end
 
