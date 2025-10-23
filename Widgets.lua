@@ -153,7 +153,9 @@ function lib:CreateScrollList(parent, name)
     lib._frameCounter = lib._frameCounter + 1
     name = name or ("GoldLedgerScroll" .. lib._frameCounter)
     local scroll = CreateFrame("ScrollFrame", name, parent, "UIPanelScrollFrameTemplate")
-    scroll:SetClipsChildren(true)
+    if scroll.SetClipsChildren then
+        scroll:SetClipsChildren(true)
+    end
 
     local child = CreateFrame("Frame", nil, scroll)
     child:SetSize(1, 1)

@@ -32,21 +32,76 @@ function addon:FormatMoney(amount)
 end
 
 ------------------------------------------------------------
+-- History helpers
+------------------------------------------------------------
+function addon:_PushHistorySnapshot(reason, newGold, diff)
+    local cd = self:GetCharData()
+    if not cd then return end
+
+    cd.history = cd.history or {}
+    cd.history[#cd.history + 1] = {
+        t = time(),
+        gold = newGold or cd.gold or GetMoney(),
+        reason = reason,
+        diff = diff,
+    }
+end
+
+------------------------------------------------------------
 -- DB Init
 ------------------------------------------------------------
 function addon:InitDB()
-    local key = GetCharKey()
     GoldLedgerDB.characters = GoldLedgerDB.characters or {}
-    GoldLedgerDB.characters[key] = GoldLedgerDB.characters[key] or {
-        gold = GetMoney(),
-        earned = 0,
-        spent = 0,
-        firstSeen = time(),
-        lastSeen = time(),
-        lastGold = GetMoney(),
-        session = { start = time(), earned = 0, spent = 0, startGold = GetMoney() },
-        history = {},
-    }
+
+    local now = GetMoney()
+    local function ensureSession(data, baseline)
+        data.session = data.session or { start = time(), earned = 0, spent = 0, startGold = baseline }
+        data.session.start = data.session.start or time()
+        data.session.earned = data.session.earned or 0
+        data.session.spent = data.session.spent or 0
+        data.session.startGold = data.session.startGold or baseline
+    end
+
+    -- Normalize existing records so stale lastGold values don't create false gains.
+    for _, data in pairs(GoldLedgerDB.characters) do
+        if type(data) == "table" then
+            data.gold = data.gold or 0
+            if data.lastGold == nil or data.lastGold ~= data.gold then
+                data.lastGold = data.gold or 0
+            end
+            data.earned = data.earned or 0
+            data.spent = data.spent or 0
+            ensureSession(data, data.lastGold)
+            data.history = data.history or {}
+            data.firstSeen = data.firstSeen or time()
+            data.lastSeen = data.lastSeen or time()
+        end
+    end
+
+    local key = GetCharKey()
+    local char = GoldLedgerDB.characters[key]
+    if not char then
+        char = {
+            gold = now,
+            earned = 0,
+            spent = 0,
+            firstSeen = time(),
+            lastSeen = time(),
+            lastGold = now,
+            session = { start = time(), earned = 0, spent = 0, startGold = now },
+            history = {},
+        }
+        GoldLedgerDB.characters[key] = char
+    else
+        char.gold = char.gold or now
+        char.earned = char.earned or 0
+        char.spent = char.spent or 0
+        char.firstSeen = char.firstSeen or time()
+        char.lastSeen = time()
+        char.lastGold = char.lastGold or char.gold or now
+        ensureSession(char, char.lastGold)
+        char.history = char.history or {}
+    end
 
     GoldLedgerDB.settings = GoldLedgerDB.settings or {
         lastTab = "summary",
@@ -87,10 +142,16 @@ f:RegisterEvent("LOOT_OPENED")
 f:RegisterEvent("PLAYER_TRADE_MONEY")
 
 local function RecordEvent(reason)
+    if addon.OnMoneyChanged then
+        addon:OnMoneyChanged(reason)
+        return
+    end
+
     local cd = addon:GetCharData()
     if not cd then return end
     local nowGold = GetMoney()
     if not cd.lastGold then cd.lastGold = nowGold end
+    cd.session = cd.session or { start = time(), earned = 0, spent = 0, startGold = cd.lastGold }
     if nowGold ~= cd.lastGold then
         local diff = nowGold - cd.lastGold
         if diff > 0 then
@@ -103,7 +164,7 @@ local function RecordEvent(reason)
         cd.gold = nowGold
         cd.lastGold = nowGold
         cd.lastSeen = time()
-        cd.history[#cd.history + 1] = { t = time(), gold = nowGold, reason = reason }
+        addon:_PushHistorySnapshot(reason, nowGold, diff)
 
         if _G.GoldLedgerUI_Refresh then _G.GoldLedgerUI_Refresh() end
         if _G.GoldLedgerHistory_Refresh then _G.GoldLedgerHistory_Refresh() end
@@ -114,6 +175,8 @@ end
 f:SetScript("OnEvent", function(_, e)
     if e == "PLAYER_LOGIN" then
         addon:InitDB()
+        if addon.InitLDB then addon:InitLDB() end
+        RecordEvent("Login")
         DEFAULT_CHAT_FRAME:AddMessage("|cffFFD700[GoldLedger]|r Loaded. Use /gold ui")
     elseif e == "PLAYER_MONEY" then
         RecordEvent("Misc")
